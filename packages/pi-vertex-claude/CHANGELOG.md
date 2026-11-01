@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bump `@anthropic-ai/vertex-sdk` to `^0.22.0` so the `global` region resolves to
+  `https://aiplatform.googleapis.com/v1` automatically. The previous `^0.11.4`
+  range capped the SDK at 0.11.x, before the global-endpoint fix
+  ([anthropics/anthropic-sdk-typescript#800], shipped in vertex-sdk 0.13.0), so
+  `GOOGLE_CLOUD_LOCATION=global` produced `https://global-aiplatform.googleapis.com`
+  (404) unless the caller set `ANTHROPIC_VERTEX_BASE_URL`. That override is no
+  longer required. (`@anthropic-ai/sdk` stays `^0.54.0`; vertex-sdk 0.x keeps the
+  `@anthropic-ai/sdk <1` peer, so no API changes.)
+
+  [anthropics/anthropic-sdk-typescript#800]: https://github.com/anthropics/anthropic-sdk-typescript/issues/800
 - Replaying cross-provider history (e.g. an OpenAI/Codex session) on a Vertex
   Claude model no longer fails with `400 tool_use.id: String should match
   pattern '^[a-zA-Z0-9_-]+$'`. Composite tool ids such as `call_X|ctc_Y/3` are
