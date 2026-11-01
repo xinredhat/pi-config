@@ -241,6 +241,79 @@ describe("vertex-claude helpers", () => {
 	});
 });
 
+describe("cross-provider history replay", () => {
+	const model = {
+		id: "claude-opus-4-8",
+		name: "Claude Opus 4.8",
+		api: "vertex-claude-api",
+		provider: "google-vertex-claude",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1000,
+		maxTokens: 100,
+	} as const;
+
+	const ANTHROPIC_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+	it("sanitizes composite tool ids and keeps tool_use/tool_result paired", () => {
+		const composite = "call_00Ton9LKLOdARax741l8D8kp|ctc_0e10efc8951f78ce016ad/3";
+		const messages = [
+			{ role: "user", content: "hi" },
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: composite, name: "bash", arguments: { cmd: "ls" } }],
+			},
+			{ role: "toolResult", toolCallId: composite, content: [{ type: "text", text: "ok" }], isError: false },
+		];
+
+		const params = convertMessages(messages as any, model as any);
+		const toolUse = params.find((p) => p.role === "assistant").content[0];
+		const toolResult = params.find((p) => p.role === "user" && p.content[0]?.type === "tool_result").content[0];
+
+		expect(toolUse.id).toMatch(ANTHROPIC_ID_RE);
+		expect(toolResult.tool_use_id).toMatch(ANTHROPIC_ID_RE);
+		expect(toolUse.id).toBe(toolResult.tool_use_id);
+		expect(toolUse.id).not.toContain("|");
+		expect(toolUse.id).not.toContain("/");
+	});
+
+	it("converts a thinking block with a cross-provider signature to text", () => {
+		const openaiSig = '{"id":"rs_0352cffbf005d2b0016ae562","encrypted_content":"gAAAAAB..."}';
+		const messages = [
+			{ role: "user", content: "hi" },
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "reasoning summary", thinkingSignature: openaiSig }],
+			},
+		];
+
+		const params = convertMessages(messages as any, model as any);
+		const block = params.find((p) => p.role === "assistant").content[0];
+
+		expect(block.type).toBe("text");
+		expect(block.text).toBe("reasoning summary");
+		expect(block.signature).toBeUndefined();
+	});
+
+	it("preserves a thinking block with a genuine Anthropic signature", () => {
+		const anthropicSig = "ErUBCkYIBxgCKkDabc123+/=XYZ_opaque-token";
+		const messages = [
+			{ role: "user", content: "hi" },
+			{
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "native reasoning", thinkingSignature: anthropicSig }],
+			},
+		];
+
+		const params = convertMessages(messages as any, model as any);
+		const block = params.find((p) => p.role === "assistant").content[0];
+
+		expect(block.type).toBe("thinking");
+		expect(block.signature).toBe(anthropicSig);
+	});
+});
+
 describe("1M context window support", () => {
 	describe("buildModels", () => {
 		it("should return only base models when VERTEX_CLAUDE_1M is not set", () => {

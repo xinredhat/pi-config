@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Replaying cross-provider history (e.g. an OpenAI/Codex session) on a Vertex
+  Claude model no longer fails with `400 tool_use.id: String should match
+  pattern '^[a-zA-Z0-9_-]+$'`. Composite tool ids such as `call_X|ctc_Y/3` are
+  sanitized (illegal chars → `_`) on both `tool_use.id` and the matching
+  `tool_result.tool_use_id` so the pair stays linked.
+- Replaying cross-provider history no longer fails with `400 Invalid
+  \`signature\` in \`thinking\` block`. A `thinkingSignature` that is not a valid
+  Anthropic token (e.g. an OpenAI reasoning item `{"id":"rs_...",...}`) now falls
+  back to a plain text block instead of being forwarded as a signature; genuine
+  Anthropic thinking signatures are still preserved.
 - Use `thinking.type=adaptive` and `output_config.effort` for Claude 4.6+
   (Opus 4.6/4.8, Sonnet 4.6). `type=enabled` + `budget_tokens` is deprecated
   on 4.6 and rejected on 4.8. Older models still use extended thinking.

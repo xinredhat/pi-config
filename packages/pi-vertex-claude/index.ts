@@ -225,6 +225,25 @@ function sanitizeSurrogates(text: string): string {
 	return text.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
 }
 
+// Anthropic requires tool_use.id / tool_result.tool_use_id to match
+// ^[a-zA-Z0-9_-]+$. Cross-provider history carries composite ids like
+// "call_X|ctc_Y/3" whose "|" and "/" are rejected with a 400. Map any
+// illegal char to "_" deterministically so a tool_use and its matching
+// tool_result still resolve to the same id.
+function sanitizeToolId(id: string): string {
+	return id.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+// A genuine Anthropic thinking signature is an opaque base64 token. Cross-provider
+// history (e.g. OpenAI) stores a serialized reasoning item as the signature, like
+// {"id":"rs_...","encrypted_content":...}; forwarding that to Anthropic yields a 400
+// "Invalid `signature` in `thinking` block". Only treat a token-shaped value as valid;
+// anything else falls back to a plain text block.
+function isAnthropicSignature(sig: string): boolean {
+	const s = sig.trim();
+	return s.length > 0 && !s.startsWith("{") && /^[A-Za-z0-9+/=_-]+$/.test(s);
+}
+
 function convertContentBlocks(
 	content: (TextContent | ImageContent)[],
 ): string | Array<{ type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } }> {
@@ -292,20 +311,29 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 				if (block.type === "text" && block.text.trim()) {
 					blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
 				} else if (block.type === "thinking" && block.thinking.trim()) {
-					// If thinking signature is missing/empty, convert to plain text
-					if ((block as ThinkingContent).thinkingSignature?.trim()) {
+					// If thinking signature is missing/empty or not a valid Anthropic
+					// signature (e.g. cross-provider history), convert to plain text
+					const sig = (block as ThinkingContent).thinkingSignature?.trim();
+					if (sig && isAnthropicSignature(sig)) {
 						blocks.push({
 							type: "thinking" as any,
 							thinking: sanitizeSurrogates(block.thinking),
-							signature: (block as ThinkingContent).thinkingSignature!,
+							signature: sig,
 						});
 					} else {
+						if (sig) {
+							log.debug("Dropping non-Anthropic thinking signature; converting thinking block to text");
+						}
 						blocks.push({ type: "text", text: sanitizeSurrogates(block.thinking) });
 					}
 				} else if (block.type === "toolCall") {
+					const safeId = sanitizeToolId(block.id);
+					if (safeId !== block.id) {
+						log.debug(`Sanitized cross-provider tool id for Anthropic: ${block.id} -> ${safeId}`);
+					}
 					blocks.push({
 						type: "tool_use",
-						id: block.id,
+						id: safeId,
 						name: block.name,
 						input: block.arguments,
 					});
@@ -318,7 +346,7 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 			const toolResults: any[] = [];
 			toolResults.push({
 				type: "tool_result",
-				tool_use_id: msg.toolCallId,
+				tool_use_id: sanitizeToolId(msg.toolCallId),
 				content: convertContentBlocks(msg.content),
 				is_error: msg.isError,
 			});
@@ -329,7 +357,7 @@ export function convertMessages(messages: Message[], model: Model<Api>): any[] {
 				const nextMsg = messages[j] as ToolResultMessage;
 				toolResults.push({
 					type: "tool_result",
-					tool_use_id: nextMsg.toolCallId,
+					tool_use_id: sanitizeToolId(nextMsg.toolCallId),
 					content: convertContentBlocks(nextMsg.content),
 					is_error: nextMsg.isError,
 				});
